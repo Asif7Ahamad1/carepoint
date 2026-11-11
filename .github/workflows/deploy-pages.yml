@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pages: read
+      pages: write
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -29,6 +29,8 @@ jobs:
         run: npm test
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - name: Check production API URL
         env:
           VITE_API_BASE: ${{ vars.VITE_API_BASE }}
