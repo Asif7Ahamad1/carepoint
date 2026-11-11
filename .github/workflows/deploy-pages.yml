@@ -1,0 +1,57 @@
+name: Build and deploy CarePoint
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Test API
+        run: npm test
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Check production API URL
+        env:
+          VITE_API_BASE: ${{ vars.VITE_API_BASE }}
+        run: node -e "if (!process.env.VITE_API_BASE || !process.env.VITE_API_BASE.startsWith('https://')) { console.error('Create the GitHub Actions variable VITE_API_BASE with the HTTPS Railway API origin.'); process.exit(1); }"
+      - name: Build frontend
+        run: npm run build --workspace @carepoint/web
+        env:
+          GITHUB_PAGES: "true"
+          VITE_API_BASE: ${{ vars.VITE_API_BASE }}
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/web/dist
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

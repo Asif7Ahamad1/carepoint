@@ -1,0 +1,9 @@
+node_modules/
+dist/
+apps/web/dist/
+packages/api/dist/
+.env
+.env.*
+!.env.example
+.DS_Store
+*.tsbuildinfo
