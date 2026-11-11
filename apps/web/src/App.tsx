@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   Activity,
   ArrowRight,
@@ -25,6 +25,8 @@ const TIME_ZONE = import.meta.env.VITE_CLINIC_TIME_ZONE || "Asia/Kolkata";
 const PATIENT_ID = "patient-demo";
 const PATIENT_NAME = "Aarav Sharma";
 
+type Account = { id: string; name: string; email: string; role: "patient" | "doctor"; status: "active" | "pending" };
+type AuthMode = "login" | "register";
 type Doctor = {
   id: string;
   name: string;
@@ -63,11 +65,16 @@ type Queue = {
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = sessionStorage.getItem("carepoint-session");
   const response = await fetch(`${API}/api${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...init?.headers,
+    },
   });
-  const body = await response.json() as { data?: T; error?: string };
+  const body = response.status === 204 ? {} : await response.json() as { data?: T; error?: string };
   if (!response.ok) throw new Error(body.error || "Something went wrong. Please try again.");
   return body.data as T;
 }
@@ -124,6 +131,9 @@ type Page = (typeof navigation)[number];
 type DemoRole = "patient" | "doctor" | "staff";
 
 export default function App() {
+  const [account, setAccount] = useState<Account | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [authMode, setAuthMode] = useState<AuthMode | null>(null);
   const [doctors, setDoctors] = useState<Doctor[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [slots, setSlots] = useState<Slot[]>([]);
@@ -140,32 +150,46 @@ export default function App() {
   const [busyAction, setBusyAction] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
+  useEffect(() => {
+    const token = sessionStorage.getItem("carepoint-session");
+    if (!token) {
+      setAuthReady(true);
+      return;
+    }
+    request<Account>("/auth/me")
+      .then(setAccount)
+      .catch(() => sessionStorage.removeItem("carepoint-session"))
+      .finally(() => setAuthReady(true));
+  }, []);
+
+  const activeRole = account?.role ?? role;
   const selectedDoctor = doctors.find((doctor) => doctor.id === doctorId);
-  const profile = role === "patient"
-    ? { name: PATIENT_NAME, initials: "AS", subtitle: "Patient portal" }
-    : role === "doctor"
-      ? { name: "Dr. Ananya Rao", initials: "AR", subtitle: "Doctor console" }
-      : { name: "Clinic team", initials: "CT", subtitle: "Reception desk" };
-  const roleNavigation: Page[] = role === "patient"
+  const displayName = account?.name ?? (role === "patient" ? PATIENT_NAME : role === "doctor" ? "Dr. Ananya Rao" : "Clinic team");
+  const profile = {
+    name: displayName,
+    initials: displayName.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase(),
+    subtitle: account ? `${account.role === "patient" ? "Patient" : "Doctor"} account` : role === "patient" ? "Patient demo" : role === "doctor" ? "Doctor demo" : "Reception demo",
+  };
+  const roleNavigation: Page[] = activeRole === "patient"
     ? [...navigation]
-    : role === "doctor"
+    : activeRole === "doctor"
       ? ["Queue"]
       : ["Appointments", "Queue"];
   const dates = useMemo(() => Array.from({ length: 7 }, (_, index) => dateOffset(clinicToday(), index)), []);
 
   const refreshAppointments = useCallback(async () => {
-    const filter = role === "patient"
-      ? `?patientId=${PATIENT_ID}`
-      : role === "doctor"
+    const filter = activeRole === "patient"
+      ? `?patientId=${encodeURIComponent(account?.id ?? PATIENT_ID)}`
+      : activeRole === "doctor"
         ? `?doctorId=${doctorId}`
         : "";
     setAppointments(await request<Appointment[]>(`/appointments${filter}`));
-  }, [doctorId, role]);
+  }, [account?.id, activeRole, doctorId]);
 
   const refreshQueue = useCallback(async () => {
-    const patient = role === "patient" ? `?patientId=${PATIENT_ID}` : "";
+    const patient = activeRole === "patient" ? `?patientId=${encodeURIComponent(account?.id ?? PATIENT_ID)}` : "";
     setQueue(await request<Queue>(`/doctors/${doctorId}/queue${patient}`));
-  }, [doctorId, role]);
+  }, [account?.id, activeRole, doctorId]);
 
   const refreshSlots = useCallback(async () => {
     setLoadingSlots(true);
@@ -238,8 +262,8 @@ export default function App() {
       const appointment = await request<Appointment>(waitlist ? "/waitlist" : "/appointments", {
         method: "POST",
         body: JSON.stringify({
-          patientId: PATIENT_ID,
-          patientName: PATIENT_NAME,
+          patientId: account?.id ?? PATIENT_ID,
+          patientName: account?.name ?? PATIENT_NAME,
           doctorId,
           startsAt: slot.startsAt,
         }),
@@ -283,6 +307,45 @@ export default function App() {
     } finally {
       setBusyAction(false);
     }
+  }
+
+  async function signOut() {
+    try {
+      await request<void>("/auth/logout", { method: "POST" });
+    } finally {
+      sessionStorage.removeItem("carepoint-session");
+      setAccount(null);
+      setRole("patient");
+      setPage("Overview");
+    }
+  }
+
+  function onAuthenticated(session: { account: Account; token: string }) {
+    sessionStorage.setItem("carepoint-session", session.token);
+    setAccount(session.account);
+    setAuthMode(null);
+    setToast(session.account.status === "pending"
+      ? "Your doctor application is saved and waiting for clinic review."
+      : `Welcome, ${session.account.name}.`);
+  }
+
+  if (!authReady) {
+    return <div className="auth-loading">Checking your sign-in…</div>;
+  }
+
+  if (account?.role === "doctor" && account.status === "pending") {
+    return (
+      <main className="auth-page">
+        <section className="auth-card">
+          <a className="brand auth-brand" href="/">CarePoint<span className="brand-period">.</span></a>
+          <div className="eyebrow">DOCTOR APPLICATION</div>
+          <h1>Thanks, {account.name}.</h1>
+          <p>Your application has been saved. The clinic must verify your registration details before your profile is published or doctor tools are enabled.</p>
+          <p className="auth-account">{account.email}</p>
+          <button className="primary-button" onClick={() => void signOut()}>Sign out</button>
+        </section>
+      </main>
+    );
   }
 
   const nav = (
@@ -330,11 +393,13 @@ export default function App() {
         <div className="profile-switch">
           <div className="profile-avatar">{profile.initials}</div>
           <div className="profile-switch-details"><strong>{profile.name}</strong><span>{profile.subtitle}</span></div>
-          <label className="role-picker"><span>DEMO ROLE</span><select aria-label="Switch demo role" value={role} onChange={(event) => {
-            const nextRole = event.target.value as DemoRole;
-            setRole(nextRole);
-            setPage(nextRole === "patient" ? "Overview" : nextRole === "doctor" ? "Queue" : "Appointments");
-          }}><option value="patient">Patient</option><option value="doctor">Doctor</option><option value="staff">Clinic team</option></select></label>
+          {account
+            ? <button className="auth-link side-auth-link" onClick={() => void signOut()}>Sign out</button>
+            : <label className="role-picker"><span>DEMO ROLE</span><select aria-label="Switch demo role" value={role} onChange={(event) => {
+              const nextRole = event.target.value as DemoRole;
+              setRole(nextRole);
+              setPage(nextRole === "patient" ? "Overview" : nextRole === "doctor" ? "Queue" : "Appointments");
+            }}><option value="patient">Patient</option><option value="doctor">Doctor</option><option value="staff">Clinic team</option></select></label>}
         </div>
         {nav}
       </aside>
@@ -347,6 +412,9 @@ export default function App() {
           <div className="topbar-right">
             <span className="today-label">{new Intl.DateTimeFormat("en-IN", { timeZone: TIME_ZONE, weekday: "short", day: "numeric", month: "short" }).format(new Date())}</span>
             <button className="help-button" onClick={() => setToast("For urgent care, call your local emergency number.")}><CircleHelp size={18} /><span>Help</span></button>
+            {account
+              ? <span className="signed-in-label">{account.email}</span>
+              : <button className="auth-link" onClick={() => setAuthMode("login")}>Sign in</button>}
             <div className="profile-avatar top-avatar">{profile.initials}</div>
           </div>
         </header>
@@ -369,7 +437,7 @@ export default function App() {
                 </div>
               </section>
 
-              {role === "patient" && offeredAppointment && (
+              {activeRole === "patient" && offeredAppointment && (
                 <section className="offer-banner">
                   <div className="offer-symbol"><Sparkles size={19} /></div>
                   <div><strong>A spot just opened up for you</strong><span>{offeredAppointment.doctorName} · {formatAppointmentDate(offeredAppointment.startsAt)} at {formatTime(offeredAppointment.startsAt)} · offer expires in 10 minutes</span></div>
@@ -525,8 +593,8 @@ export default function App() {
 
           {page === "Appointments" && (
             <section className="subpage">
-              <div className="subpage-title"><div className="eyebrow">{role === "staff" ? "FRONT DESK" : "YOUR CARE PLAN"}</div><h1>{role === "staff" ? "Clinic appointments" : "Appointments"}</h1><p>{role === "staff" ? "Review the clinic schedule and check patients in." : "All your upcoming visits and waitlist offers, in one place."}</p></div>
-              {role === "patient" && offeredAppointment && (
+              <div className="subpage-title"><div className="eyebrow">{activeRole === "staff" ? "FRONT DESK" : "YOUR CARE PLAN"}</div><h1>{activeRole === "staff" ? "Clinic appointments" : "Appointments"}</h1><p>{activeRole === "staff" ? "Review the clinic schedule and check patients in." : "All your upcoming visits and waitlist offers, in one place."}</p></div>
+              {activeRole === "patient" && offeredAppointment && (
                 <div className="offer-banner subpage-offer">
                   <div className="offer-symbol"><Sparkles size={19} /></div>
                   <div><strong>A spot just opened up for you</strong><span>{offeredAppointment.doctorName} · {formatAppointmentDate(offeredAppointment.startsAt)} at {formatTime(offeredAppointment.startsAt)}</span></div>
@@ -534,16 +602,16 @@ export default function App() {
                 </div>
               )}
               <div className="appointment-list">
-                {appointments.length === 0 ? <div className="empty-card"><CalendarDays size={26} /><h3>{role === "staff" ? "No appointments to show." : "Your next chapter starts here."}</h3><p>{role === "staff" ? "New clinic bookings will appear here." : "Book a visit with one of our specialists to get started."}</p>{role === "patient" && <button className="primary-button" onClick={() => setPage("Overview")}>Find a doctor <ArrowRight size={15} /></button>}</div> :
+                {appointments.length === 0 ? <div className="empty-card"><CalendarDays size={26} /><h3>{activeRole === "staff" ? "No appointments to show." : "Your next chapter starts here."}</h3><p>{activeRole === "staff" ? "New clinic bookings will appear here." : "Book a visit with one of our specialists to get started."}</p>{activeRole === "patient" && <button className="primary-button" onClick={() => setPage("Overview")}>Find a doctor <ArrowRight size={15} /></button>}</div> :
                   appointments.map((appointment) => (
                     <article className="appointment-card" key={appointment.id}>
                       <div className="appointment-date-block"><span>{formatAppointmentDate(appointment.startsAt).split(",")[0]}</span><strong>{new Intl.DateTimeFormat("en-IN", { timeZone: TIME_ZONE, day: "2-digit" }).format(new Date(appointment.startsAt))}</strong><small>{new Intl.DateTimeFormat("en-IN", { timeZone: TIME_ZONE, month: "short" }).format(new Date(appointment.startsAt)).toUpperCase()}</small></div>
                       <div className="appointment-detail"><span className="appointment-specialty">{doctors.find((doctor) => doctor.id === appointment.doctorId)?.specialty || "Clinic visit"}</span><h3>{appointment.doctorName}</h3><span><Clock3 size={14} /> {formatTime(appointment.startsAt)} <i /> Token #{appointment.tokenNumber}</span></div>
                       <span className={`status-pill status-${appointment.status.toLowerCase()}`}>{appointment.status.replace("_", " ")}</span>
                       <div className="appointment-actions">
-                        {role === "patient" && appointment.status === "OFFERED" && <button className="accept-button" disabled={busyAction} onClick={() => appointmentAction(appointment.id, "accept")}>Accept offer</button>}
+                        {activeRole === "patient" && appointment.status === "OFFERED" && <button className="accept-button" disabled={busyAction} onClick={() => appointmentAction(appointment.id, "accept")}>Accept offer</button>}
                         {appointment.status === "BOOKED" && <button className="text-button" disabled={busyAction} onClick={() => appointmentAction(appointment.id, "check-in")}>Check in</button>}
-                        {["BOOKED", "OFFERED"].includes(appointment.status) && role !== "doctor" && <button className="cancel-button" disabled={busyAction} onClick={() => appointmentAction(appointment.id, "cancel")}>Cancel</button>}
+                        {["BOOKED", "OFFERED"].includes(appointment.status) && activeRole !== "doctor" && <button className="cancel-button" disabled={busyAction} onClick={() => appointmentAction(appointment.id, "cancel")}>Cancel</button>}
                       </div>
                     </article>
                   ))}
@@ -553,21 +621,117 @@ export default function App() {
 
           {page === "Queue" && (
             <section className="subpage queue-page">
-              <div className="subpage-title"><div className="eyebrow">{role === "doctor" ? "DOCTOR CONSOLE" : role === "staff" ? "FRONT DESK" : "A BETTER WAITING ROOM"}</div><h1>{role === "doctor" ? "Today’s patient queue" : "Live clinic queue"}</h1><p>{role === "doctor" ? "Follow patient tokens and advance the queue as consultations finish." : "Follow the flow in real time. Your position updates automatically as patients are seen."}</p></div>
+              <div className="subpage-title"><div className="eyebrow">{activeRole === "doctor" ? "DOCTOR CONSOLE" : activeRole === "staff" ? "FRONT DESK" : "A BETTER WAITING ROOM"}</div><h1>{activeRole === "doctor" ? "Today’s patient queue" : "Live clinic queue"}</h1><p>{activeRole === "doctor" ? "Follow patient tokens and advance the queue as consultations finish." : "Follow the flow in real time. Your position updates automatically as patients are seen."}</p></div>
               <div className="queue-live-card">
                 <div className="queue-live-top"><div className="doctor-avatar lavender">{selectedDoctor?.initials ?? "AR"}<span className="avatar-online" /></div><div><span className="eyebrow">NOW AT THE CLINIC</span><h2>{queue?.doctorName ?? "Loading queue…"}</h2><p>{new Intl.DateTimeFormat("en-IN", { timeZone: TIME_ZONE, weekday: "long", day: "numeric", month: "long" }).format(new Date())} · Indiranagar, Bengaluru</p></div><span className="live-pill"><span /> LIVE UPDATES</span></div>
-                <div className="queue-live-metrics"><div><span className="queue-big-number">{role === "patient" ? (queue?.myPosition ? `#${queue.myPosition}` : "—") : (queue?.waitingCount ?? "—")}</span><span>{role === "patient" ? "YOUR POSITION" : "WAITING NOW"}</span></div><div><span className="queue-big-number">{role === "patient" ? (queue?.etaMinutes ?? "—") : (queue?.averageConsultMinutes ?? "—")}<small> min</small></span><span>{role === "patient" ? "ESTIMATED WAIT" : "AVG. CONSULT"}</span></div><div><span className="queue-big-number">#{queue?.currentToken || "—"}</span><span>NOW SERVING</span></div><div><span className="queue-big-number">{queue?.waitingCount ?? "—"}</span><span>IN THE QUEUE</span></div></div>
+                <div className="queue-live-metrics"><div><span className="queue-big-number">{activeRole === "patient" ? (queue?.myPosition ? `#${queue.myPosition}` : "—") : (queue?.waitingCount ?? "—")}</span><span>{activeRole === "patient" ? "YOUR POSITION" : "WAITING NOW"}</span></div><div><span className="queue-big-number">{activeRole === "patient" ? (queue?.etaMinutes ?? "—") : (queue?.averageConsultMinutes ?? "—")}<small> min</small></span><span>{activeRole === "patient" ? "ESTIMATED WAIT" : "AVG. CONSULT"}</span></div><div><span className="queue-big-number">#{queue?.currentToken || "—"}</span><span>NOW SERVING</span></div><div><span className="queue-big-number">{queue?.waitingCount ?? "—"}</span><span>IN THE QUEUE</span></div></div>
                 <div className="queue-estimate-note"><Activity size={16} /><span>Wait estimate is based on Dr. {queue?.doctorName?.replace("Dr. ", "") ?? "Ananya Rao"}’s rolling average of <strong>{queue?.averageConsultMinutes ?? "—"} minutes</strong> per consultation.</span></div>
-                <div className="queue-progress"><span className="progress-label">{role === "patient" ? "QUEUE PROGRESS" : "CLINIC PROGRESS"} <strong>{role === "patient" ? (queue?.myPosition ? `You’re ${queue.myPosition} ${queue.myPosition === 1 ? "patient" : "patients"} away` : "No active visit") : `${queue?.waitingCount ?? 0} ${queue?.waitingCount === 1 ? "patient is" : "patients are"} waiting`}</strong></span><div className="progress-track"><span style={{ width: `${role === "patient" && queue?.myPosition ? Math.max(12, 100 / (queue.myPosition + 1)) : queue?.waitingCount ? 68 : 0}%` }} /></div><div className="progress-caption"><span>Now serving #{queue?.currentToken || "—"}</span><span>{role === "patient" ? `Your token is ${appointments.find((appointment) => appointment.doctorId === doctorId && ["BOOKED", "CHECKED_IN"].includes(appointment.status)) ? `#${appointments.find((appointment) => appointment.doctorId === doctorId && ["BOOKED", "CHECKED_IN"].includes(appointment.status))?.tokenNumber}` : "not booked yet"}` : "Token board is up to date"}</span></div></div>
-                <div className="queue-demo-controls"><span><span className="queue-indicator" /> Connected to live updates via server-sent events</span>{role === "doctor" && <button className="text-button" disabled={busyAction} onClick={advanceQueue}>Mark current patient seen <ArrowRight size={14} /></button>}</div>
+                <div className="queue-progress"><span className="progress-label">{activeRole === "patient" ? "QUEUE PROGRESS" : "CLINIC PROGRESS"} <strong>{activeRole === "patient" ? (queue?.myPosition ? `You’re ${queue.myPosition} ${queue.myPosition === 1 ? "patient" : "patients"} away` : "No active visit") : `${queue?.waitingCount ?? 0} ${queue?.waitingCount === 1 ? "patient is" : "patients are"} waiting`}</strong></span><div className="progress-track"><span style={{ width: `${activeRole === "patient" && queue?.myPosition ? Math.max(12, 100 / (queue.myPosition + 1)) : queue?.waitingCount ? 68 : 0}%` }} /></div><div className="progress-caption"><span>Now serving #{queue?.currentToken || "—"}</span><span>{activeRole === "patient" ? `Your token is ${appointments.find((appointment) => appointment.doctorId === doctorId && ["BOOKED", "CHECKED_IN"].includes(appointment.status)) ? `#${appointments.find((appointment) => appointment.doctorId === doctorId && ["BOOKED", "CHECKED_IN"].includes(appointment.status))?.tokenNumber}` : "not booked yet"}` : "Token board is up to date"}</span></div></div>
+                <div className="queue-demo-controls"><span><span className="queue-indicator" /> Connected to live updates via server-sent events</span>{activeRole === "doctor" && <button className="text-button" disabled={busyAction} onClick={advanceQueue}>Mark current patient seen <ArrowRight size={14} /></button>}</div>
               </div>
-              {role === "doctor" && <div className="doctor-queue-list"><div className="doctor-queue-list-heading"><div><span className="eyebrow">TOKEN BOARD</span><h2>Today’s appointments <span>{doctorQueueAppointments.length}</span></h2></div><span className="live-pill"><span /> LIVE</span></div>{doctorQueueAppointments.length === 0 ? <div className="empty-state">No patients are booked in today’s queue.</div> : doctorQueueAppointments.map((appointment) => <div className="doctor-queue-row" key={appointment.id}><span className="token-chip">#{appointment.tokenNumber}</span><div><strong>{appointment.patientName}</strong><span>{formatTime(appointment.startsAt)} · {appointment.status === "CHECKED_IN" ? "In consultation" : "Waiting"}</span></div><span className={`status-pill status-${appointment.status.toLowerCase()}`}>{appointment.status.replace("_", " ")}</span></div>)}</div>}
+              {activeRole === "doctor" && <div className="doctor-queue-list"><div className="doctor-queue-list-heading"><div><span className="eyebrow">TOKEN BOARD</span><h2>Today’s appointments <span>{doctorQueueAppointments.length}</span></h2></div><span className="live-pill"><span /> LIVE</span></div>{doctorQueueAppointments.length === 0 ? <div className="empty-state">No patients are booked in today’s queue.</div> : doctorQueueAppointments.map((appointment) => <div className="doctor-queue-row" key={appointment.id}><span className="token-chip">#{appointment.tokenNumber}</span><div><strong>{appointment.patientName}</strong><span>{formatTime(appointment.startsAt)} · {appointment.status === "CHECKED_IN" ? "In consultation" : "Waiting"}</span></div><span className={`status-pill status-${appointment.status.toLowerCase()}`}>{appointment.status.replace("_", " ")}</span></div>)}</div>}
               <div className="timezone-banner"><ShieldCheck size={17} /><span>Appointment times and queue dates are shown in the clinic’s <strong>{TIME_ZONE}</strong> time zone, wherever you’re connecting from.</span></div>
             </section>
           )}
         </div>
       </main>
+      {authMode && <AuthDialog mode={authMode} onModeChange={setAuthMode} onClose={() => setAuthMode(null)} onAuthenticated={onAuthenticated} />}
       {toast && <div className="toast" role="status"><CheckCircle2 size={18} /><span>{toast}</span><button onClick={() => setToast("")} aria-label="Dismiss"><X size={15} /></button></div>}
+    </div>
+  );
+}
+
+function AuthDialog({
+  mode,
+  onModeChange,
+  onClose,
+  onAuthenticated,
+}: {
+  mode: AuthMode;
+  onModeChange: (mode: AuthMode) => void;
+  onClose: () => void;
+  onAuthenticated: (session: { account: Account; token: string }) => void;
+}) {
+  const [role, setRole] = useState<"patient" | "doctor">("patient");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    setSubmitting(true);
+    const form = new FormData(event.currentTarget);
+    const payload: Record<string, unknown> = {
+      email: form.get("email"),
+      password: form.get("password"),
+    };
+    if (mode === "register") {
+      payload.name = form.get("name");
+      payload.role = role;
+      if (role === "doctor") {
+        payload.doctorApplication = {
+          specialty: form.get("specialty"),
+          experience: Number(form.get("experience")),
+          fee: Number(form.get("fee")),
+          licenseNumber: form.get("licenseNumber"),
+          about: form.get("about"),
+        };
+      }
+    }
+    try {
+      const session = await request<{ account: Account; token: string }>(
+        mode === "login" ? "/auth/login" : "/auth/register",
+        { method: "POST", body: JSON.stringify(payload) },
+      );
+      onAuthenticated(session);
+    } catch (requestError) {
+      setError(getErrorMessage(requestError));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="auth-overlay" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onClose();
+    }}>
+      <section className="auth-card auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+        <button className="auth-close" onClick={onClose} aria-label="Close sign-in"><X size={18} /></button>
+        <a className="brand auth-brand" href="/">CarePoint<span className="brand-period">.</span></a>
+        <div className="eyebrow">{mode === "login" ? "WELCOME BACK" : "JOIN CAREPOINT"}</div>
+        <h2 id="auth-title">{mode === "login" ? "Sign in to your account" : "Create your account"}</h2>
+        <p>{mode === "login" ? "Use your email and password to continue." : "Your account is saved securely to the clinic database."}</p>
+        <form className="auth-form" onSubmit={submit}>
+          {mode === "register" && (
+            <>
+              <label>Full name<input name="name" autoComplete="name" required minLength={2} maxLength={120} /></label>
+              <label>Register as<select value={role} onChange={(event) => setRole(event.target.value as "patient" | "doctor")}><option value="patient">Patient</option><option value="doctor">Doctor (clinic review required)</option></select></label>
+            </>
+          )}
+          <label>Email<input name="email" type="email" autoComplete="email" required maxLength={254} /></label>
+          <label>Password<input name="password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} required minLength={mode === "register" ? 10 : 1} maxLength={128} /></label>
+          {mode === "register" && role === "doctor" && (
+            <div className="doctor-application-fields">
+              <p>New clinician profiles stay private until the clinic verifies the registration number.</p>
+              <label>Specialty<input name="specialty" required maxLength={80} /></label>
+              <div className="auth-field-row">
+                <label>Years of experience<input name="experience" type="number" min={0} max={60} step={1} required /></label>
+                <label>Consult fee (₹)<input name="fee" type="number" min={0} max={100000} step={1} required /></label>
+              </div>
+              <label>Medical registration number<input name="licenseNumber" required maxLength={80} /></label>
+              <label>Professional introduction<textarea name="about" required maxLength={180} rows={3} /></label>
+            </div>
+          )}
+          {error && <div className="auth-error" role="alert">{error}</div>}
+          <button className="primary-button auth-submit" disabled={submitting}>{submitting ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}</button>
+        </form>
+        <p className="auth-switch">
+          {mode === "login" ? "New to CarePoint?" : "Already have an account?"}
+          <button onClick={() => { setError(""); onModeChange(mode === "login" ? "register" : "login"); }}>
+            {mode === "login" ? "Create account" : "Sign in"}
+          </button>
+        </p>
+      </section>
     </div>
   );
 }

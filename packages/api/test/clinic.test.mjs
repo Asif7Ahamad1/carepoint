@@ -42,6 +42,61 @@ test("health and doctor endpoints expose the connected clinic", async () => {
   assert.equal(doctors.data.length, 8);
 });
 
+test("patient registration stores an account and returns a revocable session", async () => {
+  const email = `patient-${Date.now()}@example.test`;
+  const response = await fetch(`${baseUrl}/api/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Test Patient", email, password: "A-long-demo-passphrase-42", role: "patient" }),
+  });
+  const { data } = await response.json();
+  assert.equal(response.status, 201);
+  assert.equal(data.account.email, email);
+  assert.equal(data.account.status, "active");
+
+  const me = await fetch(`${baseUrl}/api/auth/me`, { headers: { Authorization: `Bearer ${data.token}` } });
+  assert.equal(me.status, 200);
+  assert.equal((await me.json()).data.id, data.account.id);
+
+  const duplicate = await fetch(`${baseUrl}/api/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Another Patient", email, password: "A-long-demo-passphrase-42", role: "patient" }),
+  });
+  assert.equal(duplicate.status, 409);
+
+  await fetch(`${baseUrl}/api/auth/logout`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${data.token}` },
+  });
+  const signedOut = await fetch(`${baseUrl}/api/auth/me`, { headers: { Authorization: `Bearer ${data.token}` } });
+  assert.equal(signedOut.status, 401);
+});
+
+test("doctor signup is stored as pending clinic review", async () => {
+  const response = await fetch(`${baseUrl}/api/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: "Test Doctor",
+      email: `doctor-${Date.now()}@example.test`,
+      password: "A-long-demo-passphrase-42",
+      role: "doctor",
+      doctorApplication: {
+        specialty: "General medicine",
+        experience: 4,
+        fee: 500,
+        about: "A verified fictional doctor application for testing.",
+        licenseNumber: `TEST-${Date.now()}`,
+      },
+    }),
+  });
+  const { data } = await response.json();
+  assert.equal(response.status, 201);
+  assert.equal(data.account.role, "doctor");
+  assert.equal(data.account.status, "pending");
+});
+
 test("availability is generated from weekday clinic hours", async () => {
   const date = futureWeekday();
   const response = await fetch(`${baseUrl}/api/availability?doctorId=dr-ananya&date=${date}`);

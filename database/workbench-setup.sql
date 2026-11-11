@@ -22,6 +22,39 @@ CREATE TABLE IF NOT EXISTS patients (
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS users (
+  id CHAR(36) PRIMARY KEY,
+  name VARCHAR(120) NOT NULL,
+  email VARCHAR(254) NOT NULL,
+  password_hash VARCHAR(160) NOT NULL,
+  role ENUM('patient', 'doctor') NOT NULL,
+  status ENUM('active', 'pending') NOT NULL DEFAULT 'active',
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  UNIQUE KEY uq_users_email (email)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+  token_hash CHAR(64) PRIMARY KEY,
+  user_id CHAR(36) NOT NULL,
+  expires_at DATETIME(3) NOT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  CONSTRAINT fk_auth_session_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  INDEX idx_auth_session_expiry (expires_at)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS doctor_applications (
+  user_id CHAR(36) PRIMARY KEY,
+  specialty VARCHAR(80) NOT NULL,
+  experience SMALLINT UNSIGNED NOT NULL,
+  fee DECIMAL(8, 2) NOT NULL,
+  about VARCHAR(180) NOT NULL,
+  license_number VARCHAR(80) NOT NULL,
+  status ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  CONSTRAINT fk_doctor_application_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  UNIQUE KEY uq_doctor_application_license (license_number)
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS availability_rules (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   doctor_id VARCHAR(40) NOT NULL,
@@ -9226,7 +9259,10 @@ ALTER USER 'carepoint_app'@'127.0.0.1'
   IDENTIFIED BY 'CHANGE_THIS_PASSWORD';
 
 GRANT SELECT ON carepoint_booking.doctors TO 'carepoint_app'@'127.0.0.1';
-GRANT SELECT ON carepoint_booking.patients TO 'carepoint_app'@'127.0.0.1';
+GRANT SELECT, INSERT ON carepoint_booking.patients TO 'carepoint_app'@'127.0.0.1';
+GRANT SELECT, INSERT ON carepoint_booking.users TO 'carepoint_app'@'127.0.0.1';
+GRANT SELECT, INSERT, DELETE ON carepoint_booking.auth_sessions TO 'carepoint_app'@'127.0.0.1';
+GRANT INSERT ON carepoint_booking.doctor_applications TO 'carepoint_app'@'127.0.0.1';
 GRANT SELECT ON carepoint_booking.availability_rules TO 'carepoint_app'@'127.0.0.1';
 GRANT SELECT ON carepoint_booking.doctor_leave TO 'carepoint_app'@'127.0.0.1';
 GRANT SELECT, INSERT, UPDATE ON carepoint_booking.appointment_slots TO 'carepoint_app'@'127.0.0.1';

@@ -7,9 +7,12 @@ import {
   CONSULTATION_MINUTES,
   type Appointment,
   type AppointmentStatus,
+  type Account,
   type BookAppointmentInput,
   type ClinicStore,
   type Doctor,
+  type RegisterAccountInput,
+  type StoredAccount,
   type QueueSnapshot,
   type Slot,
 } from "./domain.js";
@@ -67,6 +70,9 @@ class KeyedMutex {
 export class MemoryClinicStore implements ClinicStore {
   readonly mode = "demo" as const;
   private readonly appointments: Appointment[] = [];
+  private readonly accounts = new Map<string, StoredAccount>();
+  private readonly accountsByEmail = new Map<string, string>();
+  private readonly sessions = new Map<string, { accountId: string; expiresAt: string }>();
   private readonly events = new EventEmitter();
   private readonly mutex = new KeyedMutex();
   private readonly checkInTimes = new Map<string, number>();
@@ -76,6 +82,45 @@ export class MemoryClinicStore implements ClinicStore {
     this.addSampleAppointment(doctors[0], new Date(now - 12 * 60_000).toISOString(), "CHECKED_IN", 1, "patient-sample-1", "Maya Kapoor");
     this.addSampleAppointment(doctors[0], new Date(now + 8 * 60_000).toISOString(), "BOOKED", 2, "patient-sample-2", "Rohan Mehta");
     this.addSampleAppointment(doctors[0], new Date(now + 28 * 60_000).toISOString(), "BOOKED", 3, "patient-demo", "Aarav Sharma");
+  }
+
+  async registerAccount(input: RegisterAccountInput): Promise<Account> {
+    if (this.accountsByEmail.has(input.email)) {
+      throw new ClinicError("An account with this email already exists.", 409);
+    }
+    const account: Account = {
+      id: input.id,
+      name: input.name,
+      email: input.email,
+      role: input.role,
+      status: input.role === "doctor" ? "pending" : "active",
+    };
+    this.accounts.set(account.id, { account, passwordHash: input.passwordHash });
+    this.accountsByEmail.set(account.email, account.id);
+    return account;
+  }
+
+  async findAccountByEmail(email: string): Promise<StoredAccount | null> {
+    const id = this.accountsByEmail.get(email);
+    return id ? this.accounts.get(id) ?? null : null;
+  }
+
+  async createSession(accountId: string, tokenHash: string, expiresAt: string): Promise<void> {
+    this.sessions.set(tokenHash, { accountId, expiresAt });
+  }
+
+  async findSession(tokenHash: string): Promise<Account | null> {
+    const session = this.sessions.get(tokenHash);
+    if (!session) return null;
+    if (Date.parse(session.expiresAt) <= Date.now()) {
+      this.sessions.delete(tokenHash);
+      return null;
+    }
+    return this.accounts.get(session.accountId)?.account ?? null;
+  }
+
+  async revokeSession(tokenHash: string): Promise<void> {
+    this.sessions.delete(tokenHash);
   }
 
   async listDoctors(): Promise<Doctor[]> {

@@ -17,7 +17,10 @@ ALTER USER 'carepoint_app'@'127.0.0.1'
   IDENTIFIED BY 'CHANGE_THIS_PASSWORD';
 
 GRANT SELECT ON carepoint_booking.doctors TO 'carepoint_app'@'127.0.0.1';
-GRANT SELECT ON carepoint_booking.patients TO 'carepoint_app'@'127.0.0.1';
+GRANT SELECT, INSERT ON carepoint_booking.patients TO 'carepoint_app'@'127.0.0.1';
+GRANT SELECT, INSERT ON carepoint_booking.users TO 'carepoint_app'@'127.0.0.1';
+GRANT SELECT, INSERT, DELETE ON carepoint_booking.auth_sessions TO 'carepoint_app'@'127.0.0.1';
+GRANT INSERT ON carepoint_booking.doctor_applications TO 'carepoint_app'@'127.0.0.1';
 GRANT SELECT ON carepoint_booking.availability_rules TO 'carepoint_app'@'127.0.0.1';
 GRANT SELECT ON carepoint_booking.doctor_leave TO 'carepoint_app'@'127.0.0.1';
 GRANT SELECT, INSERT, UPDATE ON carepoint_booking.appointment_slots TO 'carepoint_app'@'127.0.0.1';

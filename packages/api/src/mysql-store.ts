@@ -4,6 +4,7 @@ import mysql, { type Pool, type RowDataPacket } from "mysql2/promise";
 import { clinicDateTime, clinicLocalDate, clinicWeekday, generateClinicSlots } from "./availability.js";
 import {
   ACTIVE_STATUSES,
+  type Account,
   ClinicError,
   CLINIC_TIME_ZONE,
   type Appointment,
@@ -11,11 +12,21 @@ import {
   type BookAppointmentInput,
   type ClinicStore,
   type Doctor,
+  type RegisterAccountInput,
+  type StoredAccount,
   type QueueSnapshot,
   type Slot,
 } from "./domain.js";
 
 type DoctorRow = RowDataPacket & Doctor;
+type AccountRow = RowDataPacket & {
+  id: string;
+  name: string;
+  email: string;
+  role: "patient" | "doctor";
+  status: "active" | "pending";
+  password_hash: string;
+};
 type AppointmentRow = RowDataPacket & {
   id: string;
   doctor_id: string;
@@ -86,6 +97,82 @@ export class MySqlClinicStore implements ClinicStore {
     });
     await pool.query("SELECT 1");
     return new MySqlClinicStore(pool);
+  }
+
+  async registerAccount(input: RegisterAccountInput): Promise<Account> {
+    const status = input.role === "doctor" ? "pending" : "active";
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      await connection.execute(
+        "INSERT INTO users (id, name, email, password_hash, role, status) VALUES (?, ?, ?, ?, ?, ?)",
+        [input.id, input.name, input.email, input.passwordHash, input.role, status],
+      );
+      if (input.role === "patient") {
+        await connection.execute("INSERT INTO patients (id, name) VALUES (?, ?)", [input.id, input.name]);
+      } else {
+        const application = input.doctorApplication;
+        if (!application) throw new ClinicError("Doctor application details are required.", 400);
+        await connection.execute(
+          `INSERT INTO doctor_applications
+             (user_id, specialty, experience, fee, about, license_number, status)
+           VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
+          [input.id, application.specialty, application.experience, application.fee,
+            application.about, application.licenseNumber],
+        );
+      }
+      await connection.commit();
+      return { id: input.id, name: input.name, email: input.email, role: input.role, status };
+    } catch (error) {
+      await connection.rollback();
+      if (this.isDuplicate(error)) throw new ClinicError("An account with this email already exists.", 409);
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  async findAccountByEmail(email: string): Promise<StoredAccount | null> {
+    const [rows] = await this.pool.query<AccountRow[]>(
+      "SELECT id, name, email, password_hash, role, status FROM users WHERE email = ? LIMIT 1",
+      [email],
+    );
+    const row = rows[0];
+    if (!row) return null;
+    return {
+      account: {
+        id: row.id,
+        name: row.name,
+        email: row.email,
+        role: row.role,
+        status: row.status,
+      },
+      passwordHash: row.password_hash,
+    };
+  }
+
+  async createSession(accountId: string, tokenHash: string, expiresAt: string): Promise<void> {
+    await this.pool.execute(
+      "INSERT INTO auth_sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)",
+      [tokenHash, accountId, dbDateTime(expiresAt)],
+    );
+  }
+
+  async findSession(tokenHash: string): Promise<Account | null> {
+    const [rows] = await this.pool.query<AccountRow[]>(
+      `SELECT u.id, u.name, u.email, u.role, u.status, u.password_hash
+       FROM auth_sessions s JOIN users u ON u.id = s.user_id
+       WHERE s.token_hash = ? AND s.expires_at > UTC_TIMESTAMP(3) LIMIT 1`,
+      [tokenHash],
+    );
+    const row = rows[0];
+    return row
+      ? { id: row.id, name: row.name, email: row.email, role: row.role, status: row.status }
+      : null;
+  }
+
+  async revokeSession(tokenHash: string): Promise<void> {
+    await this.pool.execute("DELETE FROM auth_sessions WHERE token_hash = ?", [tokenHash]);
   }
 
   async listDoctors(): Promise<Doctor[]> {

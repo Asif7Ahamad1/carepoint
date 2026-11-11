@@ -59,7 +59,10 @@ ALTER USER 'carepoint_app'@'127.0.0.1'
   IDENTIFIED BY 'REPLACE_WITH_A_PRIVATE_PASSWORD';
 
 GRANT SELECT ON carepoint_booking.doctors TO 'carepoint_app'@'127.0.0.1';
-GRANT SELECT ON carepoint_booking.patients TO 'carepoint_app'@'127.0.0.1';
+GRANT SELECT, INSERT ON carepoint_booking.patients TO 'carepoint_app'@'127.0.0.1';
+GRANT SELECT, INSERT ON carepoint_booking.users TO 'carepoint_app'@'127.0.0.1';
+GRANT SELECT, INSERT, DELETE ON carepoint_booking.auth_sessions TO 'carepoint_app'@'127.0.0.1';
+GRANT INSERT ON carepoint_booking.doctor_applications TO 'carepoint_app'@'127.0.0.1';
 GRANT SELECT ON carepoint_booking.availability_rules TO 'carepoint_app'@'127.0.0.1';
 GRANT SELECT ON carepoint_booking.doctor_leave TO 'carepoint_app'@'127.0.0.1';
 GRANT SELECT, INSERT, UPDATE ON carepoint_booking.appointment_slots TO 'carepoint_app'@'127.0.0.1';
@@ -99,16 +102,25 @@ The app does not lock a not-yet-created appointment row. Availability lookup gen
 
 The transaction also locks the pre-existing patient record before checking the patient's other active appointment intervals. Requests by the same patient therefore serialize even if they target different doctors. The interval check catches overlapping appointments with different start times; a unique key protects the exact-start case.
 
+## Sign-in and registration
+
+The public website opens in demo mode. Use **Sign in** in the top bar, then **Create account** to register a patient or submit a doctor application. Patient accounts and their patient profiles are saved in MySQL. Passwords are stored as salted scrypt hashes, and sign-in sessions expire after seven days.
+
+Doctor registrations are stored as pending applications with specialty, experience, fee, introduction, and medical registration number. They are intentionally not listed or granted doctor tools until the clinic verifies them. This project has no clinic administrator approval screen yet; approval must be handled by the clinic operator in the database. The demo-role selector is only for previewing screens and is not authentication.
+
+On an existing database, run `database/migrations/001_accounts_and_sessions.sql` in the selected CarePoint database before using account registration. New installations include the same tables in `database/schema.sql`. The app database user needs the additional `users`, `auth_sessions`, and `doctor_applications` grants shown above.
+
 ## Features
 
 - Weekday availability generated from 10:00–14:00 and 17:00–20:00 rules, using 20-minute consultations. Doctor leave and already-booked times are excluded.
 - UTC storage with clinic-local slot generation and IANA timezone display (`Asia/Kolkata` by default).
+- Patient sign-in and registration persisted to MySQL; doctor applications are held for clinic review.
 - Patient, doctor, and clinic-team demo screens.
 - Server-sent events for live queue updates and a wait estimate based on each doctor's rolling consultation average.
 - Cancellation waitlist with a 10-minute offer and automatic advancement after expiry.
 - Appointment state-transition audit records; MySQL triggers reject audit-row updates and deletes.
 
-The role selector is a **demo UI only**, not authentication or authorization. This classroom project is not a production medical-record system and does not implement secure user accounts, access control, payment processing, or clinical records.
+The role selector is a **demo UI only**, not authentication or authorization. Login and registration provide basic account persistence, password hashing, and expiring sessions, but this classroom project is not a production medical-record system and does not implement a clinic administrator portal, full authorization for every existing demo operation, payment processing, or clinical records.
 
 ## Host the frontend on GitHub Pages
 
@@ -127,6 +139,10 @@ The Pages workflow deliberately fails unless `VITE_API_BASE` is configured. With
 | Method | Route | Purpose |
 |---|---|---|
 | `GET` | `/api/health` | API health, storage mode, and clinic timezone |
+| `POST` | `/api/auth/register` | Create a patient account or pending doctor application |
+| `POST` | `/api/auth/login` | Sign in and create a seven-day session |
+| `GET` | `/api/auth/me` | Read the signed-in account |
+| `POST` | `/api/auth/logout` | Revoke the current session |
 | `GET` | `/api/doctors` | Doctor directory |
 | `GET` | `/api/availability?doctorId=…&date=YYYY-MM-DD` | Generated appointment slots |
 | `GET` | `/api/appointments?patientId=…` | Patient appointments |

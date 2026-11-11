@@ -65,8 +65,46 @@ export interface BookAppointmentInput {
   startsAt: string;
 }
 
+export type AccountRole = "patient" | "doctor";
+export type AccountStatus = "active" | "pending";
+
+export interface DoctorApplicationInput {
+  specialty: string;
+  experience: number;
+  fee: number;
+  about: string;
+  licenseNumber: string;
+}
+
+export interface RegisterAccountInput {
+  id: string;
+  name: string;
+  email: string;
+  passwordHash: string;
+  role: AccountRole;
+  doctorApplication?: DoctorApplicationInput;
+}
+
+export interface Account {
+  id: string;
+  name: string;
+  email: string;
+  role: AccountRole;
+  status: AccountStatus;
+}
+
+export interface StoredAccount {
+  account: Account;
+  passwordHash: string;
+}
+
 export interface ClinicStore {
   readonly mode: "demo" | "mysql";
+  registerAccount(input: RegisterAccountInput): Promise<Account>;
+  findAccountByEmail(email: string): Promise<StoredAccount | null>;
+  createSession(accountId: string, tokenHash: string, expiresAt: string): Promise<void>;
+  findSession(tokenHash: string): Promise<Account | null>;
+  revokeSession(tokenHash: string): Promise<void>;
   listDoctors(): Promise<Doctor[]>;
   getAvailability(doctorId: string, date: string): Promise<Slot[]>;
   listAppointments(patientId?: string, doctorId?: string): Promise<Appointment[]>;
