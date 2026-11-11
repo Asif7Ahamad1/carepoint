@@ -132,7 +132,7 @@ GitHub Pages hosts the static frontend, not the Express API or MySQL database. T
 4. Once the Railway API health endpoint returns `"mode":"mysql"`, add the GitHub Actions repository variable `VITE_API_BASE` containing the Railway API's HTTPS origin, without `/api`.
 5. In GitHub repository settings, enable **Pages → Build and deployment → GitHub Actions**. The workflow tests the API and builds the frontend for `/carepoint/`. The public site URL is `https://asif7ahamad1.github.io/carepoint/`.
 
-The Pages workflow deliberately fails unless `VITE_API_BASE` is configured. Without the separately hosted API and database, GitHub Pages cannot persist bookings or run the live queue. This workspace has no Git CLI installed, so creating the GitHub repository and pushing the code still needs Git installed/authenticated on your computer.
+The Pages workflow deliberately fails unless `VITE_API_BASE` is configured. Without the separately hosted API and database, GitHub Pages cannot persist bookings or run the live queue.
 
 ## API routes
 
